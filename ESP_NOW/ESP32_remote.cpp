@@ -22,7 +22,7 @@ bool BLE = false;
 bool cek1 = false;
 bool cek2 = false;
 
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/U8X8_PIN_NONE); 
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE); 
 BleKeyboard bleKeyboard;
 
 typedef struct struct_message {
@@ -30,16 +30,15 @@ typedef struct struct_message {
   float humidity;
   float clockh;
   float clockm;
-  bool relayState = false;
-  bool mosfet = true;
-  bool cek1;
+  int day;
+  int month;
 } struct_message;
 
-struct_message data1;
+struct_message data;
 
 typedef struct struct_message2 {
-  bool relayState = false;
-  bool cek2;
+  bool relayState;
+  bool mosfet;
 } struct_message2;
 
 struct_message2 data2;
@@ -54,8 +53,7 @@ int mode = 1;
 
 char timeString[6]; 
 
-const unsigned long cektime = 5000;
-const unsigned long timeout = 6000; 
+const unsigned long timeout = 8000; 
 unsigned long pressTime = 0;
 unsigned long lastUpdate = 0;
 unsigned long lastRecvTime1 = 0;  
@@ -70,16 +68,8 @@ void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
   // Tampilkan jumlah byte yang diterima
   Serial.print("Bytes received: ");
   Serial.println(len);
-  if (len == sizeof(data1)) {
-    memcpy(&data1, incomingData, sizeof(data1));
-
-    Serial.print("Received Temperature from ESP32: ");
-    Serial.print(data1.temperature);
-    Serial.println(" °C");
-    
-    Serial.print("Received Humidity from ESP32: ");
-    Serial.print(data1.humidity);
-    Serial.println(" %");
+  if (len == sizeof(data)) {
+    memcpy(&data, incomingData, sizeof(data));
 
     cek1 = true;
     lastRecvTime1 = millis();
@@ -88,7 +78,6 @@ void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
   } else if (len == sizeof(data2)) {
     // Data dari ESP8266 (data3)
     memcpy(&data2, incomingData, sizeof(data2));
-
     // Tampilkan data dari ESP8266
     Serial.print("Received some data from ESP8266");
     // Tambahkan penanganan data3 sesuai kebutuhan
@@ -104,23 +93,34 @@ void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
 }
 
 void oled() {
+  const char* shortMonths[] = {
+  "JAN", "FEB", "MAR", "APR", "MAY", "JUN", 
+  "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
+  };
+
   u8g2.clearBuffer();
+
+  u8g2.setFont(u8g2_font_doomalpha04_te);
+  u8g2.setCursor(73, 64); 
+  u8g2.print(data.day);
+  u8g2.print(" ");
+  u8g2.print(shortMonths[data.month]);
 
   u8g2.drawRBox(0, 6, 5, 5, 1);
   u8g2.drawRFrame(1, 2, 3, 6, 1);
   u8g2.setFont(u8g2_font_doomalpha04_te);  // Set font ukuran kecil
   u8g2.setCursor(7, 12);  // Posisi kiri atas
-  u8g2.print(data1.temperature, 1);  // Menampilkan nilai suhu dengan 2 desimal
+  u8g2.print(data.temperature, 1);  // Menampilkan nilai suhu dengan 2 desimal
   u8g2.print("C");  // Menampilkan satuan Celsius
 
   u8g2.drawRBox(0, 20, 5, 5, 1);
   u8g2.drawLine(2, 16, 2, 20);
   u8g2.drawLine(1, 19, 3, 19);
   u8g2.setCursor(7, 26);  // Posisi kanan atas
-  u8g2.print(data1.humidity, 0);  // Menampilkan nilai kelembapan dengan 2 desimal
+  u8g2.print(data.humidity, 0);  // Menampilkan nilai kelembapan dengan 2 desimal
   u8g2.print("%");  // Menampilkan satuan persen
 
-  sprintf(timeString, "%02d:%02d", (int)data1.clockh, (int)data1.clockm);
+  sprintf(timeString, "%02d:%02d", (int)data.clockh, (int)data.clockm);
   u8g2.setFont(u8g2_font_logisoso24_tn);  // Set font besar
   u8g2.setCursor(0, 64);  // Posisi kiri bawah
   u8g2.print(timeString);  // Menampilkan waktu dalam format HH:MM
@@ -161,20 +161,11 @@ void oled() {
     u8g2.setDrawColor(1); 
   }
   u8g2.sendBuffer();
+  setCpuFrequencyMhz(80);
 }
 
 void timecount(){
   unsigned long currentMillis = millis();
-  if (currentMillis - lastUpdate >= cektime) {
-    lastUpdate = currentMillis; 
-
-    esp_now_send(esp32Address, (uint8_t *)&data1, sizeof(data1));
-    Serial.println("Mengirim data ke ESP32");
-    
-    esp_now_send(esp8266Address, (uint8_t *)&data2, sizeof(data2));
-    Serial.println("Mengirim data ke ESP8266");
-  }
-  
   // Cek apakah ESP32 sudah tidak merespon selama lebih dari 5 detik
   if (currentMillis - lastRecvTime1 > timeout) {
     cek1 = false;  // ESP32 tidak merespon
@@ -227,7 +218,7 @@ void setup() {
     return;
   }
 
-  esp_now_send(esp32Address, (uint8_t *)&data1, sizeof(data1));
+  esp_now_send(esp32Address, (uint8_t *)&data, sizeof(data));
 }
 
 void loop() {
@@ -250,11 +241,11 @@ void loop() {
   oled();
   timecount();
   button();
-
+  
   if (BLE) { //pemanggil fungsi void
     BLEKey(); 
   } else {
-    defbutton(); 
+    defbutton();
   }
 }
 
@@ -303,7 +294,7 @@ void button(){
 void defbutton() {
   if (b1status) {
     Serial.println("Button 1 pressed!");
-    data2.relayState = !data2.relayState;
+
     Serial.println(data2.relayState ? "Hidup" : "Mati");
     esp_now_send(esp8266Address, (uint8_t *)&data2, sizeof(data2));
     delay(200);
@@ -311,9 +302,21 @@ void defbutton() {
 
   if (b2status) {
     Serial.println("Button 2 pressed!");
-    data1.mosfet = !data1.mosfet;
-    esp_now_send(esp32Address, (uint8_t *)&data1, sizeof(data1));
-    Serial.println(data1.mosfet ? "Hidup" : "Mati");
+
+    esp_now_send(esp32Address, (uint8_t *)&data2, sizeof(data2));
+    Serial.println(data2.mosfet ? "Hidup" : "Mati");
+    delay(200);
+  }
+
+  if (b3status) {
+    Serial.println("Button 3 pressed!");
+
+    delay(200);
+  }
+
+  if (b3status) {
+    Serial.println("Button 4 pressed!");
+
     delay(200);
   }
 }
@@ -330,15 +333,15 @@ void BLEKey(){
 
      if (b1status) { //BUTTON 1
        switch (mode) {
-          case 1:
-           bleKeyboard.print("A1");
-           break;
+         case 1:
+           bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN);
+          break;
          case 2:
-            bleKeyboard.print("A2");
-            break;
-          case 3:
-            bleKeyboard.print("A3");
-           break;
+           bleKeyboard.write(KEY_LEFT_ARROW);
+          break;
+         case 3:
+           bleKeyboard.print("A3");
+          break;
         }
        delay(100);
      }
@@ -346,27 +349,26 @@ void BLEKey(){
       if (b2status) { //BUTTON 2
        switch (mode) {
           case 1:
-           bleKeyboard.print("B1");
-            break;
+           bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
+          break;
          case 2:
-           bleKeyboard.print("B2");
-           break;
+           bleKeyboard.write(KEY_RIGHT_ARROW);
+          break;
          case 3:
            bleKeyboard.print("B3");
-            break;
+          break;
         }
        delay(100); 
      }
 
      if (b3status) { //BUTTON 3
        switch (mode) {
-          case 1:
-           bleKeyboard.print("C1");
-            break;
+         case 1:
+           bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE);
          case 2:
-            bleKeyboard.print("C2");
+           bleKeyboard.write(KEY_DOWN_ARROW);
           break;
-       case 3:
+         case 3:
            bleKeyboard.print("C3");
           break;
        }
@@ -375,14 +377,14 @@ void BLEKey(){
 
     if (b4status) { //BUTTON 4
        switch (mode) {
-       case 1:
-          bleKeyboard.print("D1");
-         break;
+         case 1:
+           bleKeyboard.write(KEY_MEDIA_MUTE);
+          break;
          case 2:
-           bleKeyboard.print("D2");
-           break;
-       case 3:
-          bleKeyboard.print("D3");
+           bleKeyboard.write(KEY_UP_ARROW);
+          break;
+         case 3:
+           bleKeyboard.print("D3");
           break;
      }
      delay(100); 
