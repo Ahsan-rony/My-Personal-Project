@@ -1,63 +1,64 @@
 #include <WiFi.h>
-#include <esp_now.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
-#include <time.h>  
+#include <time.h>
+#include <esp_now.h>
 
-#define DHTPIN 32      // Pin DHT11 terhubung
-#define DHTTYPE DHT11 // Jenis sensor DHT
+#define DHTPIN 32      
+#define DHTTYPE DHT11
 #define RELAY_PIN 13
-#define MOSFET_PIN  4   // Pin untuk MOSFET
+#define MOSFET_PIN 2  
 DHT dht(DHTPIN, DHTTYPE);
 
-#define BUTTON_PIN1 5  // Pin 4 untuk tombol relay 1
-#define BUTTON_PIN2 18  // Pin 0 untuk tombol relay 2
+#define BUTTON_PIN1 5  
+#define BUTTON_PIN2 18  
 #define BUTTON_PIN3 19
 
-// Konfigurasi LCD I2C
 LiquidCrystal_I2C lcd(0x27, 20, 4); // Alamat I2C LCD 2004 (bisa 0x27 atau 0x3F)
-
-bool buttonPressed1 = false;
-bool buttonPressed2 = false;
-bool longPress = false;
-
-unsigned long pressTime = 0;
-
-unsigned long lastUpdate = 0;  // Untuk melacak waktu update terakhir
-const unsigned long updateInterval = 60000;  // Interval waktu update (60 detik)
-
-bool relayState = false;
-int brightness = 255;    // Kecerahan awal 100% (0-255)
-bool mosfetState = false; 
 
 typedef struct struct_message {
   float temperature;
   float humidity;
   float clockh;
   float clockm;
-  bool relayState = false;
-  bool mosfet;
-  bool cek1;
+  int day;
+  int month;
 } struct_message;
 
-struct_message data1;
+struct_message data;
 
 typedef struct struct_message2 {
-  bool relayState = false;
-  bool cek2;
+  bool relayState;
+  bool mosfet;
 } struct_message2;
 
 struct_message2 data2;
 
+bool buttonPressed1 = false;
+bool buttonPressed2 = false;
+bool longPress = false;
+bool mosfetState = false;
+bool relayState = false;
+int brightness = 255; 
+
+float clockh;
+float clockm;
+float day; 
+float month;
+
+unsigned long pressTime = 0;
+unsigned long lastUpdate = 0;
+const unsigned long updateInterval = 60000;
+const unsigned long cektime = 4000;
+
+float lastTemperature = -100.0;
+float lastHumidity = -100.0;
 
 uint8_t esp8266Address[] = {0xEC, 0x64, 0xC9, 0xDC, 0x9B, 0x72};
 uint8_t esp32Address[] = {0xec, 0x64, 0xc9, 0x5e, 0x75, 0x6c};
 
 esp_now_peer_info_t peerInfo;
 esp_now_peer_info_t peerInfo2;
-
-float lastTemperature = -100.0;
-float lastHumidity = -100.0;
 
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 7 * 3600; // Offset zona waktu WIB (UTC+7)
@@ -85,6 +86,15 @@ byte waterDrop[8] = {
   0b01110
 };
 
+void timecount(){
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastUpdate >= cektime) {
+    lastUpdate = currentMillis; 
+    esp_now_send(esp32Address, (uint8_t *)&data, sizeof(data));
+    Serial.println("Mengirim data ke ESP32");
+  }
+}
+
 void displayTime() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
@@ -99,9 +109,14 @@ void displayTime() {
   lcd.setCursor(20 - strlen(daysOfWeek[timeinfo.tm_wday]), 1); // Hitung posisi cursor
   lcd.print(daysOfWeek[timeinfo.tm_wday]);  // timeinfo.tm_wday memberikan nilai dari 0 (Sunday) hingga 6 (Saturday)
 
+  day = timeinfo.tm_mday;     
+  month = timeinfo.tm_mon + 1;
+
   // Tampilkan jam di baris 3, menggantikan status relay
   lcd.setCursor(0, 1);
   lcd.printf("%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+  clockm = timeinfo.tm_min;
+  clockh = timeinfo.tm_hour;
 
   // Tampilkan tanggal di baris 4
   char date[20];
@@ -113,25 +128,6 @@ void displayTime() {
   lcd.print(date);
 }
 
-// Function to handle data sent feedback
-void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  Serial.print("Data Send Status: ");
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
-}
-
-void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
-  memcpy(&data1, incomingData, sizeof(data1));
-  esp_now_send(esp32Address, (uint8_t *)&data1, sizeof(data1));
-  Serial.println(data1.temperature);
-  if (data1.mosfet) {
-    mosfetState = true;
-    Serial.println(mosfetState ? "ON" : "OFF");
-  } else {
-    mosfetState = false;
-  }
-}
-
-// Function to display received data on OLED
 void updateLCD(float temperature, float humidity) {
   lcd.clear();  // Bersihkan layar
 
@@ -154,6 +150,26 @@ void updateLCD(float temperature, float humidity) {
   displayTime();
 }
 
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("Data Send Status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+}
+
+void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
+  esp_now_send(esp32Address, (uint8_t *)&data, sizeof(data));
+  if (len == sizeof(data)) {
+   memcpy(&data, incomingData, sizeof(data));
+   Serial.println("data balasan");
+   Serial.println(data.temperature);
+  } else if (len == sizeof(data2)) {
+   memcpy(&data2, incomingData, sizeof(data2));
+    if (!data2.mosfet) {
+     mosfetState = !mosfetState;
+     Serial.println(mosfetState ? "ON" : "OFF");
+    } 
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   dht.begin();
@@ -164,7 +180,6 @@ void setup() {
   pinMode(MOSFET_PIN, OUTPUT);
   analogWrite(MOSFET_PIN, brightness);  // Set kecerahan awal
 
-  // Inisialisasi LCD
   lcd.init();  
   lcd.backlight();
 
@@ -186,9 +201,8 @@ void setup() {
   delay(1000);
 
   Serial.println("Wifi Disconnect");
-// Setelah sinkronisasi waktu, matikan Wi-Fi
-  WiFi.disconnect(true);  // Putuskan Wi-Fi dan matikan WiFi STA
-  WiFi.mode(WIFI_OFF);    // Matikan Wi-Fi untuk menghemat daya
+  WiFi.disconnect(true); 
+  WiFi.mode(WIFI_OFF);    
   delay(1000);
 
   pinMode(BUTTON_PIN1, INPUT_PULLUP);
@@ -201,6 +215,7 @@ void setup() {
     return;
   }
 
+  delay(200);
   // Register callbacks with updated function signatures
   esp_now_register_send_cb(OnDataSent);  // For sending feedback
   esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
@@ -220,24 +235,26 @@ void setup() {
     Serial.println("Failed to add peer 2");
     return;
   }
-
 }
 
-
 void loop() {
+  timecount();
   struct tm timeinfo;
   // Baca nilai suhu dan kelembapan dari sensor DHT11
   float temperature = dht.readTemperature();
   float humidity = dht.readHumidity();
-  data1.temperature = dht.readTemperature();
-  data1.humidity = dht.readHumidity();
-  data1.clockh = timeinfo.tm_hour;
-  data1.clockm = timeinfo.tm_min;
+  data.temperature = temperature;
+  data.humidity = humidity;
+  data.day = day;
+  data.month = month;
+  data.clockh = clockh;
+  data.clockm = clockm;
 
   // Cek apakah pembacaan berhasil
   if (isnan(temperature) || isnan(humidity)) {
     Serial.println("Failed to read from DHT sensor!");
   } if (temperature != lastTemperature || humidity != lastHumidity) {
+    esp_now_send(esp32Address, (uint8_t *)&data, sizeof(data));
     updateLCD(temperature, humidity);
     lastTemperature = temperature;
     lastHumidity = humidity;
@@ -246,7 +263,7 @@ void loop() {
   // Perbarui LCD setiap 60 detik untuk menampilkan waktu
   if (millis() - lastUpdate >= updateInterval) {
     displayTime();  // Update waktu di LCD
-    esp_now_send(esp32Address, (uint8_t *)&data1, sizeof(data1));
+    esp_now_send(esp32Address, (uint8_t *)&data, sizeof(data));
     lastUpdate = millis();  // Reset waktu update terakhir
   }
 
@@ -279,7 +296,6 @@ void loop() {
         Serial.println("Relay is ON");
       }
 
-      // Toggle relay 2 state
       digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);  // Set status relay
 
       delay(200);  // Debounce delay
@@ -295,7 +311,6 @@ void loop() {
       longPress = false;
     }
 
-    // Cek apakah tombol sudah ditekan dan ditahan selama 1 detik
     if (millis() - pressTime >= 1000 && !longPress) {
         mosfetState = !mosfetState;  // Toggle MOSFET state (nyala/mati)
         longPress = true;  // Set flag longPress
@@ -303,9 +318,7 @@ void loop() {
     }
 
   } else {
-    // Tombol dilepas
     if (pressTime > 0 && !longPress) {
-        // Aksi untuk short press: tombol ditekan kurang dari 1 detik
         if (mosfetState) {  // Hanya ubah kecerahan jika MOSFET menyala
             brightness -= 26;  // Kurangi kecerahan sebesar 10% (26 dari 255)
             if (brightness <= 0) {
