@@ -8,35 +8,26 @@ uint8_t esp32Address[] = {0xec, 0x64, 0xc9, 0x5e, 0x75, 0x6c}; // MAC Address ES
 bool relayState = false;  // Status relay saat ini
 
 typedef struct struct_message2 {
-  bool relayState = false;
-  bool cek2;
+  bool mosfet;
+  bool relayState = true;
 } struct_message2;
 
 struct_message2 data2;
+
+unsigned long lastUpdate = 0;
 
 // Callback untuk menerima data
 void OnDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len) {
   esp_now_send(esp32Address, (uint8_t *)&data2, sizeof(data2));
   memcpy(&data2, incomingData, sizeof(data2));
-
   // Ubah status relay berdasarkan data yang diterima dari ESP32
-  if (data2.relayState) {
-    relayState = true;  // Nyalakan relay jika data3.relayState adalah true
+  if (!data2.relayState) {
+    relayState = !relayState;  // Nyalakan relay jika data3.relayState adalah true
     Serial.println("Relay dinyalakan");
-  } else {
-    relayState = false;  // Matikan relay jika data3.relayState adalah false
-    Serial.println("Relay dimatikan");
-  }
-
+  } 
+    
   // Atur relay ON/OFF berdasarkan relayState
   digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
-
-  // Siapkan data yang akan dikirimkan kembali ke ESP32
-  data2.relayState = relayState;
-  data2.cek2 = true;  // Menandakan ESP8266 aktif dan mengirimkan respon
-
-  // Kirim kembali data ke ESP32
-  esp_now_send(esp32Address, (uint8_t *)&data2, sizeof(data2));
 
   // Tampilkan status relay pada Serial Monitor
   Serial.print("Status Relay: ");
@@ -59,6 +50,7 @@ void setup() {
 
   // Inisialisasi ESP-NOW
   WiFi.mode(WIFI_STA);
+  
   if (esp_now_init() != 0) {
     Serial.println("Error initializing ESP-NOW");
     return;
@@ -75,5 +67,10 @@ void setup() {
 }
 
 void loop() {
-  // Tidak ada logika di loop karena pemrosesan dilakukan melalui callback
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastUpdate >= 5000) {
+    lastUpdate = currentMillis; 
+    esp_now_send(esp32Address, (uint8_t *)&data2, sizeof(data2));
+    Serial.println("Mengirim data ke ESP32");
+  }
 }
